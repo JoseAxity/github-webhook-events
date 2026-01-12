@@ -51,7 +51,7 @@ async function getProjectsByNodeID(pull_request, octokit) {
 }
 
 async function handlePullRequestReopened({ payload, octokit }) {
-  //if (payload.repository.name.startsWith("ORA_") || payload.repository.name.startsWith("WF_")) {
+  if (payload.repository.name.startsWith("ORA_") || payload.repository.name.startsWith("WF_")) {
     console.log(`PR Reabierta: #${payload.pull_request.number}`);
     const projectNames = await getProjectsByNodeID(payload.pull_request, octokit);
 
@@ -64,7 +64,7 @@ async function handlePullRequestReopened({ payload, octokit }) {
     }
 
     sendTeamsNotification(payload.pull_request, octokit);
-  //}
+  }
 }
 
 async function handlePullRequestOpened({ payload, octokit }) {
