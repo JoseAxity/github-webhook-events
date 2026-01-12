@@ -6,6 +6,7 @@ import http from "http";
 import axios from "axios";
 import { DateTime } from "luxon"; // Agrega luxon
 import { Octokit } from "@octokit/rest";
+import { start } from "repl";
 // Cargar variables de entorno
 dotenv.config();
 
@@ -30,64 +31,91 @@ const projectsOctokit = new Octokit({
 
 
 
-// Probar permisos del PAT con una consulta GraphQL simple
-(async () => {
-    try {
-    // Consulta con la app de GitHub
-    const installationId = process.env.GITHUB_INSTALLATION_ID;
-    if (!installationId) {
-      console.error('Falta GITHUB_INSTALLATION_ID en el .env');
-      return;
-    }
-    const appOctokit = await app.getInstallationOctokit(Number(installationId));
-    const gqlApp = await appOctokit.request('POST /graphql', {
-      query: `query { node(id: \"PR_kwDOMwR5pc68cElY\") { ... on PullRequest { projectItems(first: 10) { totalCount nodes { project { title } } }}}}`
+// ====== FUNCTIONS ======
+async function getProjectsByNodeID(pull_request, octokit) {
+  try {
+    // Consulta con la app de GitHub usando el node_id del PR recibido
+    const gqlApp = await octokit.request('POST /graphql', {
+      query: `query($id: ID!) { node(id: $id) { ... on PullRequest { projectItems(first: 10) { nodes { project { title } } }}}}`,
+      variables: { id: pull_request.node_id }
     });
-    console.log('Respuesta completa GraphQL (App):', JSON.stringify(gqlApp.data, null, 2));
-    const totalCountApp = gqlApp?.data?.data?.node?.projectItems?.totalCount;
-    console.log(`✅ projectItems.totalCount (App, node_id fijo):`, totalCountApp);
     const projectNodesApp = gqlApp?.data?.data?.node?.projectItems?.nodes || [];
     const projectTitlesApp = projectNodesApp.map(n => n.project?.title).filter(Boolean);
-    console.log('Nombres de proyectos asociados (App):', projectTitlesApp.length > 0 ? projectTitlesApp.join(', ') : 'Ninguno');
+    return projectTitlesApp;
   } catch (err) {
     console.error('❌ Error consultando projectItems.totalCount (curl style):', err?.response?.data || err.message);
+    return [];
   }
-})();
-
+}
 
 // ====== HANDLER ======
+async function handlePullRequestReopened({ payload, octokit}) {
+  if(payload.repository.name.startsWith("ORA_") || payload.repository.name.startsWith("WF_")) {
+    console.log(`PR Reabierta: #${payload.pull_request.number}`);
+    const repoName = payload.repository.name;
+    console.log(`Repo: ${repoName}`);    
+    const projectNames = await getProjectsByNodeID(payload.pull_request, octokit);
+    if (payload.pull_request.labels.length === 0 && projectNames.length === 0) {
+        const comment = "Por favor, asegúrate de asignar los labels y proyectos necesarios para una mejor gestión.";
+        await createCommentByPR(payload, octokit, comment);
+    }else if (payload.pull_request.labels.length === 0) {
+        const comment = "Por favor, asigna los labels necesarios para una mejor gestión.";
+        await createCommentByPR(payload, octokit, comment);
+    } else if (projectNames.length === 0) {
+        const comment = "Por favor, asigna los proyectos necesarios para una mejor gestión.";
+        await createCommentByPR(payload, octokit, comment);
+    }    
+    sendTeamsNotification(payload.pull_request, octokit)
+  }
+}
+
 async function handlePullRequestOpened({ payload, octokit}) {
+  if(payload.repository.name.startsWith("ORA_") || payload.repository.name.startsWith("WF_")) {
     console.log(`PR abierta: #${payload.pull_request.number}`);
     const repoName = payload.repository.name;
-    console.log(`Repo: ${repoName}`);   
+    console.log(`Repo: ${repoName}`);     
+    const projectNames = await getProjectsByNodeID(payload.pull_request, octokit);
+    if (payload.pull_request.labels.length === 0 && projectNames.length === 0) {
+        const comment = "Por favor, asegúrate de asignar los labels y proyectos necesarios para una mejor gestión.";
+        await createCommentByPR(payload, octokit, comment);
+    }else if (payload.pull_request.labels.length === 0) {
+        const comment = "Por favor, asigna los labels necesarios para una mejor gestión.";
+        await createCommentByPR(payload, octokit, comment);
+    } else if (projectNames.length === 0) {
+        const comment = "Por favor, asigna los proyectos necesarios para una mejor gestión.";
+        await createCommentByPR(payload, octokit, comment);
+    }    
     sendTeamsNotification(payload.pull_request, octokit)
+  }
 }
 
 async function handlePullRequestClosed({ payload, octokit }) {
+  if(payload.repository.name.startsWith("ORA_") || payload.repository.name.startsWith("WF_")) {
     console.log(`PR cerrada: #${payload.pull_request.number}`);
     const repoName = payload.repository.name;
-    console.log(`Repo: ${repoName}`);
-    
-    const messageForNewPRs = "Thanks for opening a new PR! Please follow our contributing guidelines to make your PR easier to review.";
+    console.log(`Repo: ${repoName}`);    
+    sendTeamsNotification(payload.pull_request, octokit)
+  }
+}
 
-    try {
+async function createCommentByPR( payload, octokit, message) {
+  try {
         await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
         owner: payload.repository.owner.login,
         repo: payload.repository.name,
         issue_number: payload.pull_request.number,
-        body: messageForNewPRs,
+        body: message,
         headers: {
             "x-github-api-version": "2022-11-28",
         },
         });
-    } catch (error) {
-        if (error.response) {
-        console.error(`Error! Status: ${error.response.status}. Message: ${error.response.data.message}`)
-        }
-        console.error(error)
+        console.log(`✅ Comentario creado en el PR: ${payload.pull_request.number}`);
+  } catch (error) {
+    if (error.response) {
+    console.error(`Error creating comment! Status: ${error.response.status}. Message: ${error.response.data.message}`)
     }
-    
-    sendTeamsNotification(payload.pull_request, octokit)
+    console.error(error)
+  }
 }
 
 // Enviar notificación a Microsoft Teams
@@ -95,7 +123,7 @@ async function sendTeamsNotification(pull_request, octokit) {
   console.log("PR node_id:", pull_request.node_id);
   console.log("PR number:", pull_request.number);
 
-  const projectNames = await getProjectsFromIssueWithPAT(pull_request);
+  const projectNames = await getProjectsByNodeID(pull_request, octokit);
   // -----------------------------
   //  DATA FOR TEAMS
   // -----------------------------
@@ -150,7 +178,7 @@ async function sendTeamsNotification(pull_request, octokit) {
                 ? pull_request.labels.map(l => l.name).join(", ")
                 : "N/A"
           },
-          { name: "Proyectos:", value: projectNames }
+          { name: "Proyectos:", value: Array.isArray(projectNames) && projectNames.length > 0 ? projectNames.join(", ") : "PR sin Proyecto" }
         ],
         markdown: true
       }
@@ -188,84 +216,10 @@ async function sendTeamsNotification(pull_request, octokit) {
   }
 }
 
-async function getProjectsFromIssueWithPAT(pull_request) {
-  let projectNames = "N/A";
-
-  try {
-    if (!pull_request?.node_id) return projectNames;
-
-    const issueNodeId = pull_request.node_id.replace(
-      "PullRequest",
-      "Issue"
-    );
-
-    const gqlResult = await projectsOctokit.request("POST /graphql", {
-      query: `
-        query($id: ID!) {
-          node(id: $id) {
-            ... on Issue {
-              projectItems(first: 20) {
-                nodes {
-                  project {
-                    title
-                  }
-                  fieldValues(first: 20) {
-                    nodes {
-                      ... on ProjectV2ItemFieldSingleSelectValue {
-                        name
-                        field {
-                          ... on ProjectV2SingleSelectField {
-                            name
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      `,
-      variables: {
-        id: issueNodeId
-      }
-    });
-
-    const items =
-      gqlResult?.data?.node?.projectItems?.nodes || [];
-
-    if (items.length > 0) {
-      const projects = items.map(item => {
-        const title = item.project?.title;
-
-        const statusField = item.fieldValues.nodes.find(
-          f => f.field?.name === "Status"
-        );
-
-        return statusField
-          ? `${title} (Status: ${statusField.name})`
-          : title;
-      });
-
-      projectNames = [...new Set(projects)]
-        .filter(Boolean)
-        .join(", ");
-    }
-  } catch (err) {
-    console.error(
-      "❌ Error Projects (PAT):",
-      err?.response?.data || err.message
-    );
-  }
-
-  return projectNames;
-}
-
-
 // ====== EVENTS ======
 app.webhooks.on("pull_request.opened", handlePullRequestOpened);
 app.webhooks.on("pull_request.closed", handlePullRequestClosed);
+app.webhooks.on("pull_request.reopened", handlePullRequestReopened);
 
 app.webhooks.onError((error) => {
     console.error("Webhook error:", error);
