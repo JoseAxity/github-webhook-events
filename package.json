@@ -2,6 +2,7 @@
   "name": "github-webhook-events",
   "version": "1.0.0",
   "description": "",
+  "type": "module",
   "main": "app.js",
   "scripts": {
     "start": "node app.js"
@@ -12,10 +13,14 @@
     "octokit": "^4.0.0",
     "dotenv": "^16.0.0",
     "axios": "^1.9.0",
-    "luxon": "^3.4.4"
+    "luxon": "^3.4.4",
+    "express": "^4.21.2"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  },
   "packageManager": "pnpm@10.18.3"
 }
