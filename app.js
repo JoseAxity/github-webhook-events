@@ -6,7 +6,6 @@ import http from "http";
 import axios from "axios";
 import { DateTime } from "luxon"; // Agrega luxon
 import { Octokit } from "@octokit/rest";
-import { start } from "repl";
 // Cargar variables de entorno
 dotenv.config();
 
@@ -24,12 +23,6 @@ const app = new App({
         secret: webhookSecret
     },
 });
-
-const projectsOctokit = new Octokit({
-  auth: process.env.GITHUB_PAT
-});
-
-
 
 // ====== FUNCTIONS ======
 async function getProjectsByNodeID(pull_request, octokit) {
