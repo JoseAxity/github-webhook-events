@@ -97,7 +97,7 @@ async function createCommentByPR(payload, octokit, message) {
       owner: payload.repository.owner.login,
       repo: payload.repository.name,
       issue_number: payload.pull_request.number,
-      body: message,
+      body: `> [!CAUTION]\n> ${message}`,
       headers: {
         "x-github-api-version": "2022-11-28",
       },
