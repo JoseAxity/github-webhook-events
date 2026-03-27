@@ -1,10 +1,11 @@
 import dotenv from "dotenv";
 import { isValidBranchCombination } from "./validaciones.js";
+import { sendTeamsNotification } from "./teams.js";
+import { cancelWorkflowsForPR } from "./cancelacion.js";
+import { createCommentByPR, getProjectsByNodeID, createLabel, assignPRLabel, changePRState } from "./github.js";
 console.log('Cargando variables de entorno...');
 import { App } from "octokit";
 import { createNodeMiddleware } from "@octokit/webhooks";
-import axios from "axios";
-import { DateTime } from "luxon";
 import { Octokit } from "@octokit/rest";
 import express from "express";
 
@@ -25,31 +26,7 @@ const githubApp = new App({
   },
 });
 
-// ================= FUNCTIONS =================
-async function getProjectsByNodeID(pull_request, octokit) {
-  try {
-    const gqlApp = await octokit.request('POST /graphql', {
-      query: `query($id: ID!) { 
-        node(id: $id) { 
-          ... on PullRequest { 
-            projectItems(first: 10) { 
-              nodes { project { title } } 
-            } 
-          }
-        }
-      }`,
-      variables: { id: pull_request.node_id }
-    });
 
-    const projectNodesApp = gqlApp?.data?.data?.node?.projectItems?.nodes || [];
-    const projectTitlesApp = projectNodesApp.map(n => n.project?.title).filter(Boolean);
-    return projectTitlesApp;
-
-  } catch (err) {
-    console.error('❌ Error consultando projectItems:', err?.response?.data || err.message);
-    return [];
-  }
-}
 
 async function handlePullRequestReopened({ payload, octokit }) {
   if (payload.repository.name.startsWith("ORA_") || payload.repository.name.startsWith("WF_")) {
@@ -64,7 +41,7 @@ async function handlePullRequestReopened({ payload, octokit }) {
       await createCommentByPR(payload, octokit, "Por favor, asigna los proyectos necesarios para una mejor gestión.");
     }
 
-    sendTeamsNotification(payload.pull_request, octokit);
+    await sendTeamsNotification(payload.pull_request, octokit, teamsWebhookUrl);
   }
 }
 
@@ -88,41 +65,13 @@ async function handlePullRequestOpened({ payload, octokit }) {
       // Validar combinaciones permitidas usando función externa
       const allowed = isValidBranchCombination(origen, destino);
       if (!allowed) {
-        // Crea label invalid-pr en el repositorio si no existe que continue el proceso.
-        try {
-          await octokit.request("POST /repos/{owner}/{repo}/labels", {
-            owner: payload.repository.owner.login,
-            repo: payload.repository.name,
-            name: "invalid-pr",
-            color: "ff0000",
-            description: "Pull Request inválido"
-          });
-        } catch (error) {
-          if (error.response && error.response.status === 422) {
-            console.log("Label 'invalid-pr' ya existe en el repositorio.");
-          } else {
-            console.error("Error creando label 'invalid-pr':", error);
-          }
-        }
-
-        // Asignar el label invalid-pr al PR
-        await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
-          owner: payload.repository.owner.login,
-          repo: payload.repository.name,
-          issue_number: payload.pull_request.number,
-          labels: ["invalid-pr"]
-        });
-
-
-        // Cerrar el PR automáticamente
-        await octokit.request("PATCH /repos/{owner}/{repo}/pulls/{pull_number}", {
-          owner: payload.repository.owner.login,
-          repo: payload.repository.name,
-          pull_number: payload.pull_request.number,
-          state: "closed"
-        });
+        // Necesito cancelar los actions que lanzo la creacion del pr
+        await cancelWorkflowsForPR(octokit, payload);
+        await createLabel(payload, octokit, "invalid-pr", "ff0000", "Pull Request inválido");
+        await assignPRLabel(payload, octokit, "invalid-pr");
+        await changePRState(payload, octokit, "closed");        
         await createCommentByPR(payload, octokit, "Este Pull Request ha sido cerrado automáticamente porque no cumple con las reglas del branching.");
-        sendTeamsNotification(payload.pull_request, octokit);
+        await sendTeamsNotification(payload.pull_request, octokit, teamsWebhookUrl);
         return;
       }
 
@@ -134,7 +83,7 @@ async function handlePullRequestOpened({ payload, octokit }) {
         await createCommentByPR(payload, octokit, "Por favor, asigna los proyectos necesarios para una mejor gestión.");
       }
 
-      sendTeamsNotification(payload.pull_request, octokit);
+      await sendTeamsNotification(payload.pull_request, octokit, teamsWebhookUrl);
     }
     console.log(`********handlePullRequestOpened********`);
   }
@@ -150,109 +99,9 @@ async function handlePullRequestClosed({ payload, octokit }) {
       return;
     } else {
       console.log(`PR cerrada: #${payload.pull_request.number}`);
-      sendTeamsNotification(payload.pull_request, octokit);
+      sendTeamsNotification(payload.pull_request, octokit, teamsWebhookUrl);
     }
     console.log(`********handlePullRequestClosed********`);
-  }
-}
-
-async function createCommentByPR(payload, octokit, message) {
-  try {
-    await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
-      owner: payload.repository.owner.login,
-      repo: payload.repository.name,
-      issue_number: payload.pull_request.number,
-      body: `> [!CAUTION]\n> ${message}`,
-      headers: {
-        "x-github-api-version": "2022-11-28",
-      },
-    });
-
-    console.log(`✅ Comentario creado en el PR: ${payload.pull_request.number}`);
-
-  } catch (error) {
-    if (error.response) {
-      console.error(`Error creating comment! Status: ${error.response.status}. Message: ${error.response.data.message}`);
-    }
-    console.error(error);
-  }
-}
-
-// ================= TEAMS =================
-async function sendTeamsNotification(pull_request, octokit) {
-  console.log("PR node_id:", pull_request.node_id);
-  console.log("PR number:", pull_request.number);
-
-  const projectNames = await getProjectsByNodeID(pull_request, octokit);
-
-  const reviewers =
-    pull_request.requested_reviewers?.map(r => r.login).join(", ") || "N/A";
-
-  const avatar =
-    pull_request.user?.avatar_url ||
-    "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png";
-
-  let themeColor = "0078D7";
-  let activityTitle = `🚀 **Nuevo Pull Request Creado**`;
-
-  if (pull_request.state === "closed" && pull_request.merged) {
-    themeColor = "28A745";
-    activityTitle = `🎉 **Pull Request mergeado**`;
-  } else if (pull_request.state === "closed") {
-    themeColor = "D83B01";
-    activityTitle = `❌ **Pull Request cerrado sin mergear**`;
-  }
-
-  const createdAtMX = DateTime
-    .fromISO(pull_request.created_at, { zone: "utc" })
-    .setZone("America/Mexico_City")
-    .toLocaleString(DateTime.DATETIME_MED_WITH_SECONDS);
-
-  const message = {
-    "@type": "MessageCard",
-    "@context": "https://schema.org/extensions",
-    themeColor,
-    summary: `Pull Request en ${pull_request.base.repo.name}`,
-    sections: [
-      {
-        activityTitle,
-        activitySubtitle: `Repositorio: **${pull_request.base.repo.name}**`,
-        activityImage: avatar,
-        facts: [
-          { name: "Título:", value: pull_request.title },
-          { name: "Autor:", value: pull_request.user.login },
-          { name: "Branch:", value: `${pull_request.head.ref} → ${pull_request.base.ref}` },
-          { name: "Revisores:", value: reviewers },
-          { name: "Creado:", value: createdAtMX },
-          {
-            name: "Labels:",
-            value:
-              Array.isArray(pull_request.labels) && pull_request.labels.length > 0
-                ? pull_request.labels.map(l => l.name).join(", ")
-                : "N/A"
-          },
-          {
-            name: "Proyectos:",
-            value: Array.isArray(projectNames) && projectNames.length > 0
-              ? projectNames.join(", ")
-              : "PR sin Proyecto"
-          }
-        ],
-        markdown: true
-      }
-    ],
-    potentialAction: [
-      { "@type": "OpenUri", name: "🔗 Ver Pull Request", targets: [{ os: "default", uri: pull_request.html_url }] },
-      { "@type": "OpenUri", name: "📄 Ver Archivos", targets: [{ os: "default", uri: `${pull_request.html_url}/files` }] },
-      { "@type": "OpenUri", name: "📜 Ver Commits", targets: [{ os: "default", uri: `${pull_request.html_url}/commits` }] }
-    ]
-  };
-
-  try {
-    await axios.post(teamsWebhookUrl, message);
-    console.log(`✅ Teams enviado para PR: ${pull_request.number}`);
-  } catch (err) {
-    console.error("❌ Error enviando a Teams:", err.response?.data || err.message);
   }
 }
 
