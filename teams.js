@@ -1,7 +1,7 @@
 // team.js
 import axios from "axios";
 import { DateTime } from "luxon";
-import { getProjectsByNodeID } from "./app.js";
+import { getProjectsByNodeID } from "./github.js";
 
 export async function sendTeamsNotification(pull_request, octokit, teamsWebhookUrl) {
   console.log("PR node_id:", pull_request.node_id);
