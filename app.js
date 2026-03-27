@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import { isValidBranchCombination } from "./validaciones.js";
 console.log('Cargando variables de entorno...');
 import { App } from "octokit";
 import { createNodeMiddleware } from "@octokit/webhooks";
@@ -69,18 +70,71 @@ async function handlePullRequestReopened({ payload, octokit }) {
 
 async function handlePullRequestOpened({ payload, octokit }) {
   if (payload.repository.name.startsWith("ORA_") || payload.repository.name.startsWith("WF_")) {
-    console.log(`PR abierta: #${payload.pull_request.number}`);
-    const projectNames = await getProjectsByNodeID(payload.pull_request, octokit);
+    
+    // find in tag skip-scan
+    if (payload.pull_request.body && payload.pull_request.body.includes("skip-scan")) {
+      console.log(`PR #${payload.pull_request.number} contiene 'skip-scan', omitiendo validacion y notificacion por que es una homologacion de ramas.`);
+      return;
 
-    if (payload.pull_request.labels.length === 0 && projectNames.length === 0) {
-      await createCommentByPR(payload, octokit, "Por favor, asegúrate de asignar los labels y proyectos necesarios para una mejor gestión.");
-    } else if (payload.pull_request.labels.length === 0) {
-      await createCommentByPR(payload, octokit, "Por favor, asigna los labels necesarios para una mejor gestión.");
-    } else if (projectNames.length === 0) {
-      await createCommentByPR(payload, octokit, "Por favor, asigna los proyectos necesarios para una mejor gestión.");
+    } else {
+      console.log(`PR abierta: #${payload.pull_request.number}`);
+      const projectNames = await getProjectsByNodeID(payload.pull_request, octokit);
+
+      const origen = payload.pull_request.base?.ref;
+      const destino = payload.pull_request.head?.ref;
+      console.log(`Origen: ${origen}, Destino: ${destino}`);
+
+      // Validar combinaciones permitidas usando función externa
+      const allowed = isValidBranchCombination(origen, destino);
+      if (!allowed) {
+        // Crea label invalid-pr en el repositorio si no existe que continue el proceso.
+        try {
+          await octokit.request("POST /repos/{owner}/{repo}/labels", {
+            owner: payload.repository.owner.login,
+            repo: payload.repository.name,
+            name: "invalid-pr",
+            color: "ff0000",
+            description: "Pull Request inválido"
+          });
+        } catch (error) {
+          if (error.response && error.response.status === 422) {
+            console.log("Label 'invalid-pr' ya existe en el repositorio.");
+          } else {
+            console.error("Error creando label 'invalid-pr':", error);
+          }
+        }
+
+        // Asignar el label invalid-pr al PR
+        await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
+          owner: payload.repository.owner.login,
+          repo: payload.repository.name,
+          issue_number: payload.pull_request.number,
+          labels: ["invalid-pr"]
+        });
+
+
+        // Cerrar el PR automáticamente
+        await octokit.request("PATCH /repos/{owner}/{repo}/pulls/{pull_number}", {
+          owner: payload.repository.owner.login,
+          repo: payload.repository.name,
+          pull_number: payload.pull_request.number,
+          state: "closed"
+        });
+        await createCommentByPR(payload, octokit, "Este Pull Request ha sido cerrado automáticamente porque no cumple con las reglas del branching.");
+        sendTeamsNotification(payload.pull_request, octokit);
+        return;
+      }
+
+      if (payload.pull_request.labels.length === 0 && projectNames.length === 0) {
+        await createCommentByPR(payload, octokit, "Por favor, asegúrate de asignar los labels y proyectos necesarios para una mejor gestión.");
+      } else if (payload.pull_request.labels.length === 0) {
+        await createCommentByPR(payload, octokit, "Por favor, asigna los labels necesarios para una mejor gestión.");
+      } else if (projectNames.length === 0) {
+        await createCommentByPR(payload, octokit, "Por favor, asigna los proyectos necesarios para una mejor gestión.");
+      }
+
+      sendTeamsNotification(payload.pull_request, octokit);
     }
-
-    sendTeamsNotification(payload.pull_request, octokit);
   }
 }
 
