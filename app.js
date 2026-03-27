@@ -270,7 +270,7 @@ server.use(
 
 // Root healthcheck
 server.get("/", (req, res) => {
-  res.send("Webhook used by SCM team engineering Backoffice, author Jose Toledano  🚀");
+  res.send("Webhook used by SCM team engineering Backoffice, author Jose Toledano  🚀 v2.0.0");
 });
 
 server.listen(port, host, () => {
