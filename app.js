@@ -70,12 +70,12 @@ async function handlePullRequestReopened({ payload, octokit }) {
 
 async function handlePullRequestOpened({ payload, octokit }) {
   if (payload.repository.name.startsWith("ORA_") || payload.repository.name.startsWith("WF_")) {
-    
-    // find in tag skip-scan
-    if (payload.pull_request.body && payload.pull_request.body.includes("skip-scan")) {
-      console.log(`PR #${payload.pull_request.number} contiene 'skip-scan', omitiendo validacion y notificacion por que es una homologacion de ramas.`);
+    console.log(`Repositorio: #${payload.repository.name}`);
+    // Si el body o los labels contienen 'skip-scan', omitir validación y notificación
+    const hasSkipScanLabel = Array.isArray(payload.pull_request.labels) && payload.pull_request.labels.some(l => l.name === "skip-scan");
+    if ((payload.pull_request.body && payload.pull_request.body.includes("skip-scan")) || hasSkipScanLabel) {
+      console.log(`PR #${payload.pull_request.number} contiene 'skip-scan' (en body o label), omitiendo validacion y notificacion por que es una homologacion de ramas.`);
       return;
-
     } else {
       console.log(`PR abierta: #${payload.pull_request.number}`);
       const projectNames = await getProjectsByNodeID(payload.pull_request, octokit);
@@ -270,7 +270,7 @@ server.use(
 
 // Root healthcheck
 server.get("/", (req, res) => {
-  res.send("Webhook used by SCM team engineering Backoffice, author Jose Toledano  🚀 v2.0.0");
+  res.send("Webhook used by SCM team engineering Backoffice, author Jose Toledano  🚀 v3.0.0");
 });
 
 server.listen(port, host, () => {
