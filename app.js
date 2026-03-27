@@ -58,8 +58,8 @@ async function handlePullRequestOpened({ payload, octokit }) {
       console.log(`PR abierta: #${payload.pull_request.number}`);
       const projectNames = await getProjectsByNodeID(payload.pull_request, octokit);
 
-      const origen = payload.pull_request.base?.ref;
-      const destino = payload.pull_request.head?.ref;
+      const destino = payload.pull_request.base?.ref;
+      const origen = payload.pull_request.head?.ref;
       console.log(`Origen: ${origen}, Destino: ${destino}`);
 
       // Validar combinaciones permitidas usando función externa
@@ -130,7 +130,7 @@ server.use(
 
 // Root healthcheck
 server.get("/", (req, res) => {
-  res.send("Webhook used by SCM team engineering Backoffice, author Jose Toledano  🚀 v7.0.0");
+  res.send("Webhook used by SCM team engineering Backoffice, author Jose Toledano  🚀 v8.0.0");
 });
 
 server.listen(port, host, () => {
