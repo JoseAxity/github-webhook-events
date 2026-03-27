@@ -70,6 +70,7 @@ async function handlePullRequestReopened({ payload, octokit }) {
 
 async function handlePullRequestOpened({ payload, octokit }) {
   if (payload.repository.name.startsWith("ORA_") || payload.repository.name.startsWith("WF_")) {
+    console.log(`********handlePullRequestOpened********`);
     console.log(`Repositorio: #${payload.repository.name}`);
     // Si el body o los labels contienen 'skip-scan', omitir validación y notificación
     const hasSkipScanLabel = Array.isArray(payload.pull_request.labels) && payload.pull_request.labels.some(l => l.name === "skip-scan");
@@ -135,13 +136,23 @@ async function handlePullRequestOpened({ payload, octokit }) {
 
       sendTeamsNotification(payload.pull_request, octokit);
     }
+    console.log(`********handlePullRequestOpened********`);
   }
 }
 
 async function handlePullRequestClosed({ payload, octokit }) {
   if (payload.repository.name.startsWith("ORA_") || payload.repository.name.startsWith("WF_")) {
-    console.log(`PR cerrada: #${payload.pull_request.number}`);
-    sendTeamsNotification(payload.pull_request, octokit);
+    console.log(`********handlePullRequestClosed********`);
+    console.log(`Repositorio: #${payload.repository.name}`);
+    const hasSkipScanLabel = Array.isArray(payload.pull_request.labels) && payload.pull_request.labels.some(l => l.name === "skip-scan");
+    if ((payload.pull_request.body && payload.pull_request.body.includes("skip-scan")) || hasSkipScanLabel) {
+      console.log(`PR #${payload.pull_request.number} contiene 'skip-scan' (en body o label), omitiendo validacion y notificacion por que es una homologacion de ramas.`);
+      return;
+    } else {
+      console.log(`PR cerrada: #${payload.pull_request.number}`);
+      sendTeamsNotification(payload.pull_request, octokit);
+    }
+    console.log(`********handlePullRequestClosed********`);
   }
 }
 
