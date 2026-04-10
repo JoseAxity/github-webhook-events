@@ -18,6 +18,8 @@ export function isValidBranchCombination(origen, destino) {
     (/^hotfix.*/.test(origen) && destino === "main") ||
     (/^wip.*/.test(origen) && /^feature.*/.test(destino)) ||
     (/^cherryp.*/.test(origen) && destino === "staging") ||
+    (/^cherryp.*/.test(origen) && destino === "main") ||
+    (/^cherryp.*/.test(origen) && destino === "develop") ||
     (origen === "develop" && /^wip.*/.test(destino)) ||
     (origen === "develop" && /^feature.*/.test(destino))||
      (origen === "main" && /^wip.*/.test(destino)) ||
